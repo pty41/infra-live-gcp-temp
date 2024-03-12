@@ -1,0 +1,116 @@
+name: Deploy Terraform
+
+on: 
+  workflow_dispatch:
+    branches:
+      - dev
+      - release
+  push:
+
+env:
+  tf_version: '1.5.2'
+  tg_version: 'v0.48.3'
+  GIT_VERSION: "${{ github.ref_name }}"
+  GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+
+jobs:
+  terragrunt:
+    name: 'Terragrunt'
+    runs-on: medium
+
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    # Checkout the repository to the GitHub Actions runner
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - id: 'auth'
+      name: 'Authenticate to Google Cloud'
+      uses: 'google-github-actions/auth@v1'
+      with:
+        credentials_json: '${{ secrets.GOOGLE_CREDENTIALS }}'
+
+    # Install the latest version of Terragrunt CLI and configure the Terragrunt CLI configuration file with a Terragrunt Cloud user API token
+    - name: Setup Terraform
+      uses: hashicorp/setup-Terraform@v1
+      with:
+        terraform_version: ${{ env.tf_version }}
+        terraform_wrapper: false
+    - name: Setup Terraform version
+      run: terraform --version
+    - name: Setup Terraform wrapper path
+      run: which terraform
+
+    - name: Setup Terragrunt
+      run: |
+        sudo wget -q -O /bin/terragrunt "https://github.com/gruntwork-io/terragrunt/releases/download/${{ env.tg_version }}/terragrunt_linux_amd64"
+        sudo chmod +x /bin/terragrunt
+        terragrunt -v
+    - name: Checkout
+      uses: actions/checkout@v3
+    - uses: pre-commit/action@v3.0.0
+      with:
+        extra_args: --all-files
+
+    - name: Set up SSH agent
+      run: |
+        mkdir -p $HOME/.ssh
+        echo "${{ secrets.SSH_KEY_GITHUB_ACTIONS }}" > $HOME/.ssh/id_rsa
+        chmod 400 $HOME/.ssh/id_rsa
+        eval $(ssh-agent)
+        ssh-add "$HOME/.ssh/id_rsa"
+
+    - name: Terragrunt Plan DEV
+      if: github.ref == 'refs/heads/dev'
+      working-directory: dev
+      run: 
+        terragrunt run-all plan --terragrunt-non-interactive
+      env:
+        GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa"
+  
+    - name: Terragrunt Apply DEV
+      if: github.ref == 'refs/heads/dev' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      working-directory: dev
+      run: terragrunt run-all apply --terragrunt-non-interactive
+      env:
+        GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa"
+
+    # Generates an execution plan for Terragrunt
+    - name: Terragrunt Plan PRE
+      if: github.ref == 'refs/heads/release' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      working-directory: pre
+      run: 
+        terragrunt run-all plan --terragrunt-non-interactive
+      env:
+        GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa"
+
+    # Generates an execution apply for Terragrunt
+    - name: Terragrunt Apply PRE
+      if: github.ref == 'refs/heads/release' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      working-directory: pre
+      run: 
+        terragrunt run-all apply --terragrunt-non-interactive
+      env:
+        GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa"
+  
+    # Generates an execution plan for Terragrunt
+    - name: Terragrunt Plan PRO
+      if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+      working-directory: pro
+      run: 
+        terragrunt run-all plan --terragrunt-non-interactive
+      env:
+        GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa"
+
+    # Generates an execution apply for Terragrunt
+    - name: Terragrunt Apply PRO
+      if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+      working-directory: pro
+      run: 
+        terragrunt run-all apply --terragrunt-non-interactive
+      env:
+        GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa"
